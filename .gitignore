@@ -1,0 +1,9 @@
+2020-food-tweets.txt
+817-tweet-no-batching-dataset/
+817-tweet-no-batching-model/
+__pycache__/
+dataset/
+install-huggingface.sh
+model/
+results/
+*~
