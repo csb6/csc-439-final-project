@@ -242,8 +242,10 @@ def build_dataset(tweet_file_path, tokenizer):
 
     return len(label_set), tokenized_dataset
 
+# Runs/tunes (if needed)/evaluates a DistilBERT model
 def run_distilbert_model(tokenizer, data_collator, label_count,
-                         train_dataset, dev_dataset, test_dataset):
+                         train_dataset, dev_dataset, test_dataset,
+                         eval_test=False):
     args = TrainingArguments(
         output_dir="./results",
         learning_rate=2e-5,
@@ -282,13 +284,16 @@ def run_distilbert_model(tokenizer, data_collator, label_count,
         model.save_pretrained("./model")
     print("Evaluating model on dev dataset...")
     print("DistilBERT f1 score (Development):", trainer.evaluate())
-    print("Evaluating model on test dataset")
-    predictions, label_ids, metrics = trainer.predict(test_dataset)
+    if eval_test:
+        print("Evaluating model on test dataset")
+        predictions, label_ids, metrics = trainer.predict(test_dataset)
     return predictions, label_ids, metrics
 
 def dummy(doc):
     return doc
 
+# For each sample in the dataset, converts the tokenized samples back into
+# strings and labels, cleaning up tokens to be more suitable for a unigram model
 def gather_tweets_and_labels(tokenizer, dataset):
     tweets = []
     labels = []
@@ -298,6 +303,7 @@ def gather_tweets_and_labels(tokenizer, dataset):
         labels.append(sample["labels"])
     return tweets, labels
 
+# Runs and evaluates a simple unigram logisitic regression model using tf values as features.
 def run_baseline_model(tokenizer, data_collator, train_dataset, dev_dataset, test_dataset,
                        eval_test=False):
     print("Converting/filtering tokens of tweets...")
@@ -332,6 +338,8 @@ def run_baseline_model(tokenizer, data_collator, train_dataset, dev_dataset, tes
 # 11314 eval tweets f1: 0.3 (taken from first 100000 Tweets)
 # 103710 eval tweets f1: 0.52
 def main():
+    eval_test = True
+
     tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
@@ -355,11 +363,12 @@ def main():
     train_dataset = train_dev_split_dataset["train"]
 
     predictions, label_ids, metrics = run_distilbert_model(tokenizer, data_collator, label_count,
-                                                           train_dataset, dev_dataset, test_dataset)
-    print("DistillBERT f1 score (test):", metrics)
+                                                           train_dataset, dev_dataset, test_dataset,
+                                                           eval_test)
     baseline_predictions = run_baseline_model(tokenizer, data_collator,
-                                              train_dataset, dev_dataset, test_dataset)
-    if baseline_predictions:
+                                              train_dataset, dev_dataset, test_dataset,
+                                              eval_test)
+    if eval_test:
         p_value = bootstrap_metric.compute(predictions=predictions, references=baseline_predictions)
         print("p (compared to baseline model on test set):", p_value)
 
