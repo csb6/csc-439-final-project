@@ -1,3 +1,8 @@
+# Author: Cole Blakley
+# Description: This program builds/runs models to predict the state that Tweets
+#  originate from based solely on their text. The baseline is a logistic regression
+#  model using unigrams, while the primary model is a DistilBERT model, fine-tuned
+#  for the Twitter dataset.
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification, \
   DataCollatorWithPadding, AutoModelForSequenceClassification, TrainingArguments, Trainer
 from datasets import Dataset, Features, load_metric
@@ -99,6 +104,7 @@ def to_us_state_abbrev(location, timezone):
                 return abbrev
     return None
 
+# Attempts to match a timezone to a normalized timezone string
 def to_us_tz_abbrev(name):
     if not name:
         return None
@@ -113,6 +119,7 @@ def to_us_tz_abbrev(name):
                 return abbrev
     return None
 
+# Converts a lat/lon position into a U.S. timezone
 def to_us_timezone(timezone_str):
     return to_us_tz_abbrev(to_timezone(timezone_str))
 
@@ -173,6 +180,7 @@ def tweet_iter(input_file, count=-1):
 f1_metric = load_metric("f1")
 bootstrap_metric = load_metric("bootstrap_resample")
 
+# Get measures indicating performance
 def compute_metrics(preds):
     logits, labels = preds
     predictions = numpy.argmax(logits, axis=-1)
@@ -181,29 +189,24 @@ def compute_metrics(preds):
 
 # tokens that start with punctuation are not useful for baseline classifier,
 # so discard them to reduce noise
-punct = re.escape("-+,.?!\"'{}[]_&^();:/\\…#")
+punct = re.escape("-+,.?!\"'{}[]_&^();:/\\…")
 unwanted_token_pattern = re.compile(f"^[{punct}]+")
 
+# Filter tokens for baseline model
 def filter_tokens(tokens):
     result = []
     for token in tokens:
-        if token == "http" or token == "https":
-            # Many tweets end with a URL of some kind, so ignore this trailing part of tweets
+        if token.startswith("http"):
+            # Many tweets end with a URL of some kind, so ignore this part of tweets
             break
-        elif token.startswith("##"):
-            # BERT tokenizer breaks some words into subparts, prepends "##" to them.
-            # Ex: "chorizo" is broken into ['cho', '##riz', '##o'], which isn't very
-            #  useful since these are not common subwords.
-            # We want to recombine these into the original words.
-            result[-1] += token[2:]
         elif unwanted_token_pattern.match(token):
             continue
         else:
             result.append(token)
     return result
 
-# Start of 2020: line 83935287
-# End of 2020: line 89876132
+# If not written to disk already, need to generate the dataset by reading/tokenizing the
+# Tweet data.
 def build_dataset(tweet_file_path, tokenizer):
     # Tweet Dataset:
     #  Features:
@@ -282,12 +285,12 @@ def run_distilbert_model(tokenizer, data_collator, label_count,
         except FileExistsError:
             print("./model directory already exists")
         model.save_pretrained("./model")
-    print("Evaluating model on dev dataset...")
-    print("DistilBERT f1 score (Development):", trainer.evaluate())
+    #print("Evaluating model on dev dataset...")
+    #print("DistilBERT f1 score (Development):", trainer.evaluate())
     if eval_test:
         print("Evaluating model on test dataset")
-        predictions, label_ids, metrics = trainer.predict(test_dataset)
-    return predictions, label_ids, metrics
+        embeddings, predictions, metrics = trainer.predict(test_dataset)
+    return test_dataset.features["labels"].int2str(predictions), metrics
 
 def dummy(doc):
     return doc
@@ -323,7 +326,7 @@ def run_baseline_model(tokenizer, data_collator, train_dataset, dev_dataset, tes
         X_test = tf_vectorizer.transform(test_dataset)
 
     print("Training baseline model...")
-    model = LogisticRegression(C=1.0, max_iter=1000)
+    model = LogisticRegression(C=20.0, max_iter=1000)
     model.fit(X_train, y_train)
 
     y_dev_pred = model.predict(X_dev)
@@ -332,11 +335,8 @@ def run_baseline_model(tokenizer, data_collator, train_dataset, dev_dataset, tes
     if eval_test:
         y_test_pred = model.predict(X_test)
         print("Baseline f1 score (test):", f1_score(y_test, y_test_pred, average="micro"))
-        return y_test_pred
+        return y_test_pred, y_test
 
-# 817 eval tweets f1: 0.19 (taken from 3000 Tweets)
-# 11314 eval tweets f1: 0.3 (taken from first 100000 Tweets)
-# 103710 eval tweets f1: 0.52
 def main():
     eval_test = True
 
@@ -361,15 +361,25 @@ def main():
                                                                                  test_size=0.1)
     dev_dataset = train_dev_split_dataset["test"]
     train_dataset = train_dev_split_dataset["train"]
+    print(" # of Tweets in test data:", len(test_dataset))
+    print(" # of Tweets in train data:", len(train_dataset))
+    print(" # of Tweets in dev data:", len(dev_dataset))
 
-    predictions, label_ids, metrics = run_distilbert_model(tokenizer, data_collator, label_count,
-                                                           train_dataset, dev_dataset, test_dataset,
-                                                           eval_test)
+    predictions, metrics = run_distilbert_model(tokenizer, data_collator, label_count,
+                                                train_dataset, dev_dataset, test_dataset,
+                                                eval_test)
+    print(metrics)
     baseline_predictions = run_baseline_model(tokenizer, data_collator,
                                               train_dataset, dev_dataset, test_dataset,
                                               eval_test)
     if eval_test:
-        p_value = bootstrap_metric.compute(predictions=predictions, references=baseline_predictions)
+        baseline_labels, true_labels = baseline_predictions
+        print("DistilBERT preds:", baseline_labels[:10])
+        print("Baseline preds:", predictions[:10])
+        print("True preds:", true_labels[:10])
+        p_value = bootstrap_metric.compute(predictions=test_dataset.features["labels"].str2int(predictions),
+                                           references=test_dataset.features["labels"].str2int(baseline_labels),
+                                           true_labels=test_dataset.features["labels"].str2int(true_labels))
         print("p (compared to baseline model on test set):", p_value)
 
 main()
